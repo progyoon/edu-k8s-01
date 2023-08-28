@@ -1,0 +1,120 @@
+1.교육 환경구성
+교육교재 : https://github.com/ssongman/ktds-edu-k8s-istio
+윤상용	네트워크IT개발팀	bastion11	34.130.165.53	user11
+ip : 34.130.165.53
+User : ktdseduuser 
+Advanced SSH settings
+Use private key : C:\githubrepo\ktds-edu-k8s-istio\beforebegin\gcp-vm-key\ktdseduuser
+rootpass
+
+
+
+
+2.docker 컨테이너 및 쿠버네티스
+*k3s : 쿠버네티스의 경량화버전
+*namespace : kubectl get ns
+*쿠버네티스 Manifest file 을 이용하여  deploy : 도커file과 같은 11.userlist-deployment.yaml
+kubectl -n user11 create -f ./kubernetes/userlist/11.userlist-deployment.yaml
+*ku get pod -w
+userlist-74c9c8f969-nt8gq   1/1     Running   0          6m46s   10.42.0.9    bastion11   <none>           <none>
+curltest                    1/1     Running   0          64s     10.42.0.10   bastion11   <none>           <none>
+kubectl -n user11 get pod -o wide
+ku exec -it userlist-74c9c8f969-nt8gq -- bash
+
+*쿠버네티스에서는 SERVICE로 표현 : 앞단 RR (응답 시간이 빠르고 구성이 단순하다는 점이 장점) 처리 등 12.userlist-svc.yaml
+쿠버네티스에 서비스를 배포하는 방법이 다양하게 존재하는데 그중 대표적인 방법중에 하나가 Helm chart 방식
+kubectl -n user11 get svc
+kubectl -n user11 get pod -o wide
+NAME           TYPE        CLUSTER-IP      EXTERNAL-IP   PORT(S)   AGE
+userlist-svc   ClusterIP   10.43.246.236   <none>        80/TCP    15s
+
+pod 갯수를 늘려보자.
+deploy manifest file을 직접 수정하여 replicas 값을 변경
+$ kubectl -n user11 edit deploy userlist
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: userlist
+  namespace: song
+  ...
+spec:
+  replicas: 1                      <--- 3으로 수정한다.
+  selector:
+    matchLabels:
+      app: userlist
+      ....
+---
+# scale 명령으로 pod 3개로 증가
+$ kubectl -n user11 scale --replicas=3 deployment/userlist
+
+
+
+
+
+
+3. pod 외부에서 내부로 IP 접근 방법
+* Ingress : 인그레스는 L4설정, 도메인명에 "*.nip.io" 가 포함되어 있어서 IP 만 포함되도록 한다면 어떠한 이름으로 변경해도 상관없이 해당 IP 로 매핑, 클러스터 내의 서비스에 대한 외부 접근을 관리하는 API 오브젝트이며, 일반적으로 HTTP를 관리
+인그레스는 부하 분산, SSL, 명칭 기반의 가상 호스팅을 제공
+
+ingress 생성
+kubectl -n user11 create -f ./kubernetes/userlist/15.userlist-ingress-local.yaml
+생성확인
+kubectl -n user11 get ingress
+kubectl -n kube-system get svc
+
+브라우저에서 접근 : http://userlist.user11.cloud.35.209.207.26.nip.io
+master IP로 접근 : curl http://10.128.0.35:31353/users/1 -H "Host:userlist.user11.cloud.35.209.207.26.nip.io"
+
+Clean up (pod delete) : ku delete pod curltest
+  ku delete -f ./kubernetes/userlist/11.userlist-deployment.yaml
+  ku delete -f ./kubernetes/userlist/12.userlist-svc.yaml
+  ku delete -f ./kubernetes/userlist/16.userlist-ingress-cloud.yaml
+
+
+
+
+
+
+4.Service Mesh
+*서비스메쉬란?
+서비스 메시는 서비스간의 통신을 제어하고 관리하는 방식임
+서비스간 호출은 인프라계층의 proxy 를 통해 이루어짐
+서비스 메시를 구성하는 개별 proxy는 서비스 내부가 아니라 각 서비스와 함께 실행되므로 sidecar 라고 부름
+각 서비스에 inject 된 이러한 sidecar proxy 들이 모여 서 Mesh Network를 형성
+
+*Istio는 기존 분산 애플리케이션에 투명하게 계층화되는 오픈 소스 서비스 메시이다. Istio는 간단한 설정만으로 서비스를 보호, 연결 및 모니터링하는 강력한 기능을 제공한다.
+Istio는 서비스 코드 변경이 거의 또는 전혀 없이 로드 밸런싱, 서비스 간 인증 및 모니터링 기능을 제공한다.
+강력한 컨트롤 플레인은 다음과 같은 중요한 기능을 제공한다.
+ 1)TLS 암호화, 강력한 ID 기반 인증 및 권한 부여를 통해 클러스터에서 안전한 서비스 간 통신
+ 2)HTTP, gRPC, WebSocket 및 TCP 트래픽에 대한 자동 로드 밸런싱
+ 3)Routing rule, retry policy, failovers 및 복원력 테스트를위한 Fault Injection 등을 통해 트래픽 동작을 세밀하게 제어
+ 4)액세스 제어, 속도 제한 및 할당량을 지원하는 플러그형 정책 레이어 및 구성 API
+ 5)클러스터 내의 모든 트래픽에 대한 메트릭을 확인 및 추적 가능
+
+*Chart : 간편하게 deployment pod, service, ingress 등 실행
+ex) helm repo add bitnami https://charts.bitnami.com/bitnami
+    bitnami https://charts.bitnami.com/bitnami : 오픈소스 커스터마이징된 REPO
+    helm search repo bitnami
+    helm -n user11 install nginx bitnami/nginx
+
+1)namespace 생성 : kubectl create namespace istio-system
+2)istio-base 설치 : helm -n istio-system install istio-base istio/base
+3)istiod 설치 : helm -n istio-system install istio-istiod istio/istiod
+
+*모니터링 3종 : grafana (Inbound & Outbound 처리 성능), kiali (세션흐름 & 지나간 이력 점검), jaeger (오래걸린 service & Operation 분석)
+
+* Traffic Shifting (WBR) : 서비스별로 트래픽의 가중치를 조정하므로서 특정 버전에서 다른 버전으로 트래픽을 이동하는 방법을 제어
+* Request Routing(CBR) : 여러 버전의 마이크로서비스로 동적으로 라우팅하는 방법을 확인, 트래픽의 특정 Contents를 기반으로 Routing 하므로 CBR(Contents Based Routing) 
+* Circuit Breaking
+첫번째, Connection Max & Pending 수에 따른 circuit break
+ 1) service 요청(upstream)에 대한 connection pool 을 정의한다.
+ 2) 최대 활성 연결 갯수와 최대 요청 대기 수를 지정한다.
+ 3) 허용된 최대 요청 수 보다 많은 요청을 하게 되면 지정된 임계값만큼 대기 요청을 갖게된다.
+ 4) 이 임계점을 넘어가는 추가적인 요청은 거부(circuit break)하게 된다.
+두번째, Load balancing pool의 인스턴스의 상태에 기반하는 circuit break
+ 1) 인스턴스(endpoints) 에 대한 load balancing pool 이 생성/운영 된다.
+ 2) n개의 인스턴스를 가지는 load balancing pool 중 응답이 없는 인스턴스를 탐지하고 배제(circuit break)한다.
+ 3) HTTP 서비스인 경우 미리 정의된 시간 동안 API 호출 할 때 5xx 에러가 지속적으로 리턴되면 pool 로 부터 제외된다.
+
+
